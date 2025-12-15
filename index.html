@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>AR Model - The Heart</title>
+    
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v7.2.0/dist/aframe-extras.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+    
+    <style>
+      .matrix-ctrl, .prompt-msg {
+        display: none !important;
+      }
+    </style>
+    
+    <script>
+      // *** CONFIGURABLE DELAY TIME (in seconds) ***
+      const audioDelaySeconds = 0.2; 
+      
+      let audioPlayed = false;
+      
+      const playAudioFallback = () => {
+          if (audioPlayed) return;
+          
+          const delayMs = audioDelaySeconds * 1000;
+
+          setTimeout(() => {
+              const audioEl = document.querySelector('#audio-files');
+              if (audioEl && audioEl.paused) {
+                  audioEl.loop = true;
+                  audioEl.volume = 0.5;
+
+                  audioEl.play().then(() => {
+                      audioPlayed = true;
+                      console.log(`HTML Audio started successfully after ${audioDelaySeconds} seconds.`);
+                  }).catch(e => {
+                      console.warn("HTML Audio playback failed (browser block), waiting for user interaction:", e);
+                  });
+              }
+          }, delayMs);
+      };
+
+      // *** GESTURE DETECTOR COMPONENT ***
+      AFRAME.registerComponent('gesture-detector', {
+        schema: { enabled: { default: true }, sensitivity: { default: 0.5 }, zoomSpeed: { default: 0.01 } },
+        init: function () {
+          this.isDragging = false;
+          this.startX = 0;
+          this.startY = 0;
+          this.startRotation = { x: 0, y: 0 };
+          this.startScale = 10.0;
+          
+          const targetEl = document.body;
+          
+          targetEl.addEventListener('mousedown', (e) => this.onStart(e));
+          targetEl.addEventListener('mousemove', (e) => this.onMove(e));
+          targetEl.addEventListener('mouseup', (e) => this.onEnd(e));
+          targetEl.addEventListener('touchstart', (e) => this.onTouchStart(e));
+          targetEl.addEventListener('touchmove', (e) => this.onTouchMove(e));
+          targetEl.addEventListener('touchend', () => this.onEnd());
+          
+          this.el.sceneEl.addEventListener('wheel', (e) => this.onZoom(e)); 
+        },
+        onStart: function (event) {
+          if (this.data.enabled && this.el.getAttribute('visible')) { 
+            this.isDragging = true;
+            this.startX = event.screenX;
+            this.startY = event.screenY;
+            const currentRotation = this.el.getAttribute('rotation');
+            this.startRotation = { x: currentRotation.x, y: currentRotation.y };
+          }
+        },
+        onMove: function (event) {
+          if (this.isDragging && this.data.enabled) {
+            const deltaX = event.screenX - this.startX;
+            const deltaY = event.screenY - this.startY;
+            const newRotation = {
+              x: this.startRotation.x - deltaY * this.data.sensitivity, 
+              y: this.startRotation.y + deltaX * this.data.sensitivity, 
+            };
+            this.el.setAttribute('rotation', newRotation);
+          }
+        },
+        onTouchStart: function (event) {
+          if (event.touches.length === 2) {
+            this.startDistance = this.getTouchDistance(event.touches);
+            this.startScale = this.el.getAttribute('scale').x;
+          } else if (event.touches.length === 1) {
+            this.onStart(event.touches[0]);
+          }
+        },
+        onTouchMove: function (event) {
+          if (event.touches.length === 2) {
+            const newDistance = this.getTouchDistance(event.touches);
+            const scaleFactor = newDistance / this.startDistance;
+            const newScale = Math.min(Math.max(this.startScale * scaleFactor, 0.05), 300.0); 
+            this.el.setAttribute('scale', newScale + " " + newScale + " " + newScale);
+          } else if (event.touches.length === 1) {
+            this.onMove(event.touches[0]);
+          }
+        },
+        onZoom: function (event) {
+          const scale = this.el.getAttribute('scale').x;
+          let newScale = scale + (event.deltaY * -this.data.zoomSpeed);
+          // *** MODIFIED: Mouse wheel limit is now 50.0 (was 30.0) ***
+          newScale = Math.min(Math.max(newScale, 0.05), 50.0); 
+          this.el.setAttribute('scale', newScale + " " + newScale + " " + newScale);
+        },
+        getTouchDistance: function (touches) {
+          const dx = touches[0].clientX - touches[1].clientX;
+          const dy = touches[0].clientY - touches[1].clientY;
+          return Math.sqrt(dx * dx + dy * dy);
+        },
+        onEnd: function () {
+          this.isDragging = false;
+        },
+      });
+    </script>
+    
+    <script>
+      AFRAME.registerComponent('pin-and-play-audio', {
+        init: function() {
+          const targetEl = document.querySelector('#target-0');
+          const modelEl = this.el;
+
+          let isPinned = false;
+          let modelReady = false;
+          let targetFound = false;
+          
+          const executePinning = () => {
+              if (isPinned || !modelReady || !targetFound) return;
+              
+              isPinned = true;
+
+              setTimeout(() => {
+                  const worldPos = new THREE.Vector3();
+                  const worldRot = new THREE.Quaternion();
+                  targetEl.object3D.getWorldPosition(worldPos);
+                  targetEl.object3D.getWorldQuaternion(worldRot);
+
+                  modelEl.object3D.position.copy(worldPos);
+                  modelEl.object3D.quaternion.copy(worldRot);
+
+                  modelEl.setAttribute('visible', true);
+                  targetEl.object3D.visible = false;
+                  
+                  playAudioFallback();
+
+                  document.body.addEventListener('touchstart', playAudioFallback, { once: true });
+                  document.body.addEventListener('click', playAudioFallback, { once: true });
+                  
+                  console.log("Model pinned. Waiting for user interaction to confirm audio.");
+              }, 100);
+          };
+
+          modelEl.addEventListener('model-loaded', () => {
+              modelReady = true;
+              executePinning();
+          });
+          
+          targetEl.addEventListener('targetFound', () => {
+              targetFound = true;
+              executePinning();
+          }, { once: true });
+        }
+      });
+    </script>
+  </head>
+  <body>
+
+    <a-scene 
+      mindar-image="imageTargetSrc: /arweb2/newtarget.mind;" 
+      color-space="sRGB" 
+      renderer="colorManagement: true, physicallyCorrectLights" 
+      vr-mode-ui="enabled: false" 
+      device-orientation-permission-ui="enabled: false"
+    >
+      <a-assets>
+        <a-asset-item id="hardAnimationModel" src="/arweb2/latestanimationtest.glb"></a-asset-item>
+        </a-assets>
+
+      <audio id="audio-files" preload="auto" style="display:none;">
+          <source src="/arweb2/animationaudiolatest.ogg" type="audio/ogg">
+          Your browser does not support the audio element.
+      </audio>
+
+      <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+      <a-entity mindar-image-target="targetIndex: 0" id="target-0"></a-entity>
+        
+      <a-gltf-model 
+        id="pinned-model"
+        rotation="0 0 0" 
+        position="0 0 0" 
+        scale="30.0 30.0 30.0" 
+        src="#hardAnimationModel" 
+        animation-mixer 
+        gesture-detector
+        visible="false"
+        pin-and-play-audio="targetId: #target-0"
+      >
+      </a-gltf-model>
+      
+    </a-scene>
+    
+  </body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
